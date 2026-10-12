@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PDF Q&amp;A</title>
+<style>
+ body{font-family:system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1a1a1a}
+ h1{font-size:22px} section{border:1px solid #d8d8d8;border-radius:8px;padding:14px 16px;margin:14px 0}
+ h2{font-size:15px;margin:0 0 10px} input[type=text],textarea{width:100%;box-sizing:border-box;padding:8px;font:inherit}
+ button{padding:7px 14px;margin-top:8px;cursor:pointer} table{width:100%;border-collapse:collapse;font-size:14px}
+ td,th{text-align:left;padding:5px 6px;border-bottom:1px solid #eee} .ready{color:#0a7d2c} .failed{color:#b00020} .processing{color:#9a6700}
+ .cite{background:#f6f8fa;border-left:3px solid #4a7;padding:8px 10px;margin:8px 0;font-size:14px}
+ .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;color:#fff}
+ .yes{background:#0a7d2c}.no{background:#b00020} #msg{color:#b00020;font-size:14px;min-height:18px}
+</style></head><body>
+<h1>PDF Question Answering</h1>
+<section><h2>1. Identify (demo user API key)</h2>
+ <input id="key" type="text" placeholder="Paste an API key from your .env (ALICE_API_KEY or BOB_API_KEY)">
+ <button id="save">Use key</button> <span id="who"></span></section>
+<section><h2>2. Upload PDFs</h2>
+ <input id="file" type="file" accept="application/pdf,.pdf" multiple> <button id="upload">Upload</button>
+ <div id="msg"></div></section>
+<section><h2>Your documents</h2>
+ <table><thead><tr><th></th><th>File</th><th>Status</th><th>Pages</th><th>Details</th><th></th></tr></thead><tbody id="docs"></tbody></table>
+ <small>Tick documents to restrict the question to them; leave all unticked to search all your ready documents.</small></section>
+<section><h2>3. Ask a question</h2>
+ <textarea id="q" rows="3" placeholder="Ask something about your documents"></textarea>
+ <button id="ask">Ask</button><div id="answer"></div></section>
+<script>
+const $ = id => document.getElementById(id);
+let timer = null;
+const hdr = () => ({'X-API-Key': localStorage.getItem('apikey') || ''});
+const el = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
+async function api(path, opts = {}) {
+  const r = await fetch(path, {...opts, headers: {...hdr(), ...(opts.headers || {})}});
+  let body = null; try { body = await r.json(); } catch (e) {}
+  return {ok: r.ok, status: r.status, body};
+}
+async function refresh() {
+  const r = await api('/documents');
+  const tb = $('docs'); const checked = new Set([...document.querySelectorAll('.sel:checked')].map(c => c.value));
+  tb.replaceChildren();
+  if (!r.ok) { $('who').textContent = r.status === 401 ? 'Invalid or missing API key' : ''; return; }
+  $('who').textContent = 'Key accepted';
+  let pending = false;
+  for (const d of r.body) {
+    const tr = el('tr'); const td0 = el('td'); const cb = el('input'); cb.type = 'checkbox'; cb.className = 'sel'; cb.value = d.id;
+    cb.disabled = d.status !== 'ready'; cb.checked = checked.has(d.id); td0.append(cb);
+    const del = el('button', 'Delete'); del.onclick = async () => { await api('/documents/' + d.id, {method: 'DELETE'}); refresh(); };
+    const tdDel = el('td'); tdDel.append(del);
+    tr.append(td0, el('td', d.filename), el('td', d.status, d.status), el('td', d.page_count || ''), el('td', d.error || ''), tdDel);
+    tb.append(tr); if (d.status === 'processing') pending = true;
+  }
+  clearTimeout(timer); if (pending) timer = setTimeout(refresh, 1500);
+}
+$('save').onclick = () => { localStorage.setItem('apikey', $('key').value.trim()); refresh(); };
+$('key').value = localStorage.getItem('apikey') || '';
+$('upload').onclick = async () => {
+  $('msg').textContent = '';
+  for (const f of $('file').files) {
+    const fd = new FormData(); fd.append('file', f);
+    const r = await api('/documents', {method: 'POST', body: fd});
+    if (!r.ok) $('msg').textContent += `${f.name}: ${r.body && r.body.detail ? r.body.detail : 'upload failed (' + r.status + ')'}  `;
+  }
+  $('file').value = ''; refresh();
+};
+$('ask').onclick = async () => {
+  const out = $('answer'); out.replaceChildren(el('p', 'Thinking…'));
+  const ids = [...document.querySelectorAll('.sel:checked')].map(c => c.value);
+  const r = await api('/ask', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({question: $('q').value, document_ids: ids.length ? ids : null})});
+  out.replaceChildren();
+  if (!r.ok) { out.append(el('p', `Error ${r.status}: ${r.body && r.body.detail ? JSON.stringify(r.body.detail) : ''}`, 'failed')); return; }
+  const a = r.body;
+  const head = el('p'); head.append(el('span', a.supported ? 'Supported by documents' : 'Not found in documents', 'badge ' + (a.supported ? 'yes' : 'no')));
+  out.append(head, el('p', a.answer));
+  for (const c of a.citations) {
+    const d = el('div', '', 'cite'); d.append(el('b', `${c.document_name} — page ${c.page}`), el('div', '“' + c.excerpt + '”')); out.append(d);
+  }
+};
+refresh();
+</script></body></html>
