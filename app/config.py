@@ -12,6 +12,10 @@ UPLOAD_DIR = DATA_DIR / "uploads"
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "20")) * 1024 * 1024
 MAX_PAGES = int(os.getenv("MAX_PAGES", "300"))
 
+OCR_ENABLED = os.getenv("OCR_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+OCR_MAX_PAGES = int(os.getenv("OCR_MAX_PAGES", "20"))
+OCR_DPI = int(os.getenv("OCR_DPI", "200"))
+
 DEMO_USERS = {
     "alice": os.getenv("ALICE_API_KEY", "alice-demo-key-change-me"),
     "bob": os.getenv("BOB_API_KEY", "bob-demo-key-change-me"),

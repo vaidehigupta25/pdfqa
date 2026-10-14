@@ -71,13 +71,36 @@ def scanned_pdf(path: Path):
     c = canvas.Canvas(str(path), pagesize=A4); c.drawImage(ImageReader(str(tmp)), 40, H - 300, width=500, height=222); c.showPage(); c.save()
     tmp.unlink()
 
+def ocr_sample_pdf(path: Path):
+    """Image-only PDF with real sentences and one askable fact, for the OCR demo (samples/ocr/)."""
+    lines = ["Visitor Parking Notice",
+             "Visitors may park free for the first 2 hours.",
+             "After that the charge is INR 50 per hour.",
+             "Visitor parking is behind Building C."]
+    img = Image.new("RGB", (1000, 420), "white")
+    d = ImageDraw.Draw(img)
+    font = ImageFont.load_default(size=34)
+    for i, line in enumerate(lines):
+        d.text((40, 40 + i * 80), line, fill="black", font=font)
+    tmp = path.with_suffix(".png"); img.save(tmp)
+    c = canvas.Canvas(str(path), pagesize=A4)
+    c.drawImage(ImageReader(str(tmp)), 40, H - 300, width=W - 80, height=(W - 80) * 420 / 1000)
+    c.showPage(); c.save()
+    tmp.unlink()
 
 if __name__ == "__main__":
+    import sys
+    (ROOT / "ocr").mkdir(exist_ok=True)
+    if "--ocr-only" in sys.argv:           # does not touch the other committed samples
+        ocr_sample_pdf(ROOT / "ocr" / "scanned_ocr.pdf")
+        print("OCR sample written to", ROOT / "ocr")
+        sys.exit(0)
     for name, pages in ALICE.items(): make_pdf(ROOT / "alice" / name, pages)
     for name, pages in BOB.items(): make_pdf(ROOT / "bob" / name, pages)
     inv = ROOT / "invalid"
     c = canvas.Canvas(str(inv / "empty.pdf"), pagesize=A4); c.showPage(); c.save()      # one blank page
     scanned_pdf(inv / "scanned.pdf")
+    ocr_sample_pdf(ROOT / "ocr" / "scanned_ocr.pdf")
     good = (ROOT / "alice" / "hr_leave_policy.pdf").read_bytes()
     (inv / "corrupt.pdf").write_bytes(b"%PDF-1.4\n" + os.urandom(300))                    # header + garbage
     (inv / "truncated.pdf").write_bytes(good[: len(good) // 3])                           # cut-off real PDF

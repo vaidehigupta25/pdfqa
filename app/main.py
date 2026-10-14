@@ -4,6 +4,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import numpy as np
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,7 +16,7 @@ from .chunker import chunk_page
 from .db import get_db, init_db
 from .embeddings import embed
 from .llm import LLMError
-from .pdf_parser import PdfError, extract_pages
+from .pdf_parser import PdfError, extract_pages_ex
 
 log = logging.getLogger("pdfqa")
 
@@ -32,7 +33,8 @@ app = FastAPI(title="PDF Q&A", lifespan=lifespan)
 
 def _doc_dict(r) -> dict:
     return {"id": r["id"], "filename": r["filename"], "status": r["status"],
-            "error": r["error"], "page_count": r["page_count"], "created_at": r["created_at"]}
+            "error": r["error"], "page_count": r["page_count"],
+            "ocr_used": bool(r["ocr_used"]), "created_at": r["created_at"]}
 
 
 def _owned_doc(db, doc_id: str, user_id: int):
@@ -52,8 +54,10 @@ def _process_document(doc_id: str, user_id: int):
         items = [(p["page"], c) for p in pages for c in chunk_page(p["text"])]
         vecs = embed([c for _, c in items])
         with get_db() as db:
+            # VERIFY: this must match your ORIGINAL chunk insert (see step 2 below)
             db.executemany("INSERT INTO chunks(document_id,user_id,page,text,embedding) VALUES(?,?,?,?,?)",
-                           [(doc_id, user_id, pg, txt, v.tobytes()) for (pg, txt), v in zip(items, vecs)])
+                           [(doc_id, user_id, pg, txt, np.asarray(v, dtype=np.float32).tobytes())
+                            for (pg, txt), v in zip(items, vecs)])
             db.execute("UPDATE documents SET status='ready' WHERE id=? AND user_id=?", (doc_id, user_id))
     except Exception as e:
         log.exception("processing failed")
@@ -79,7 +83,7 @@ async def upload_document(background: BackgroundTasks, file: UploadFile = File(.
         error = PdfError(422, "Empty file: 0 bytes uploaded.")
     else:
         try:
-            pages = extract_pages(data)
+            pages, ocr_used = extract_pages_ex(data)
         except PdfError as e:
             error = e
     if error:                                            # record failure so it is visible in the document list
@@ -91,8 +95,8 @@ async def upload_document(background: BackgroundTasks, file: UploadFile = File(.
     path = config.UPLOAD_DIR / f"{doc_id}.pdf"          # never use the client's filename on disk
     path.write_bytes(data)
     with get_db() as db:
-        db.execute("INSERT INTO documents(id,user_id,filename,status,page_count,file_path) VALUES(?,?,?,'processing',?,?)",
-                   (doc_id, user["id"], filename, len(pages), str(path)))
+        db.execute("INSERT INTO documents(id,user_id,filename,status,page_count,file_path,ocr_used) VALUES(?,?,?,'processing',?,?,?)",
+                   (doc_id, user["id"], filename, len(pages), str(path), 1 if ocr_used else 0))
         db.executemany("INSERT INTO pages(document_id,user_id,page,text) VALUES(?,?,?,?)",
                        [(doc_id, user["id"], i, t) for i, t in enumerate(pages, 1)])
     background.add_task(_process_document, doc_id, user["id"])

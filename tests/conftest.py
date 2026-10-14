@@ -1,4 +1,5 @@
 import os
+os.environ["OCR_ENABLED"] = "false"
 import tempfile
 from pathlib import Path
 

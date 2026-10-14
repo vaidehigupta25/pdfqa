@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS documents(
   error TEXT,
   page_count INTEGER DEFAULT 0,
   file_path TEXT,
+  ocr_used INTEGER DEFAULT 0,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS pages(
   document_id TEXT NOT NULL,
@@ -51,3 +52,7 @@ def init_db():
     with get_db() as db:
         db.execute("PRAGMA journal_mode=WAL")
         db.executescript(SCHEMA)
+        # migrate databases created before the OCR flag existed
+        cols = [r["name"] for r in db.execute("PRAGMA table_info(documents)")]
+        if "ocr_used" not in cols:
+            db.execute("ALTER TABLE documents ADD COLUMN ocr_used INTEGER DEFAULT 0")
