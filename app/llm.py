@@ -42,6 +42,11 @@ def _parse_json(text: str) -> dict:
             raise LLMError("LLM returned malformed JSON")
 
 
+def _is_daily_quota(body: str) -> bool:
+    """Gemini names the exhausted quota in the 429 body, e.g. '...RequestsPerDayPerProjectPerModel-FreeTier'."""
+    return "perday" in body.lower().replace(" ", "").replace("_", "")
+
+
 def _call_openai_compatible(question: str, evidence: list[dict]) -> dict:
     if config.LLM_PROVIDER != "ollama" and not config.LLM_API_KEY:
         raise LLMError("LLM_API_KEY is not set (see .env.example).")
@@ -50,9 +55,10 @@ def _call_openai_compatible(question: str, evidence: list[dict]) -> dict:
                             {"role": "user", "content": _build_user_prompt(question, evidence)}]}
     headers = {"Authorization": f"Bearer {config.LLM_API_KEY or 'ollama'}"}
     last = "unknown error"
-    for attempt in range(4):
+    attempts = 3
+    for attempt in range(attempts):
         try:
-            r = httpx.post(f"{config.LLM_BASE_URL}/chat/completions", json=payload, headers=headers, timeout=90)
+            r = httpx.post(f"{config.LLM_BASE_URL}/chat/completions", json=payload, headers=headers, timeout=60)
         except httpx.HTTPError as e:
             last = f"network error: {e}"
         else:
@@ -65,12 +71,19 @@ def _call_openai_compatible(question: str, evidence: list[dict]) -> dict:
                     return _parse_json(content)
                 except LLMError as e:
                     last = str(e)
-            elif r.status_code in (429, 500, 502, 503):
-                last = f"HTTP {r.status_code} (rate limit/overload)"
+            elif r.status_code == 429:
+                body = r.text[:400]
+                if _is_daily_quota(body):    # retrying cannot help: stop at once and say why
+                    raise LLMError("DAILY free-tier quota used up for this model/project (HTTP 429). "
+                                   f"Change LLM_MODEL/LLM_PROVIDER or wait for the reset. Provider said: {body}")
+                last = f"HTTP 429 per-minute rate limit. Provider said: {body}"
+            elif r.status_code in (500, 502, 503):
+                last = f"HTTP {r.status_code} (provider overloaded)"
             else:
-                raise LLMError(f"LLM request failed: HTTP {r.status_code} {r.text[:200]}")
-        time.sleep(3 * (2 ** attempt))
-    raise LLMError(f"LLM unavailable after retries: {last}")
+                raise LLMError(f"LLM request failed: HTTP {r.status_code} {r.text[:300]}")
+        if attempt < attempts - 1:
+            time.sleep(5 * (2 ** attempt))      # 5 s, then 10 s
+    raise LLMError(f"LLM unavailable after {attempts} attempts: {last}")
 
 
 def _content_words(text: str) -> set[str]:
